@@ -87,6 +87,15 @@ def load_results():
     except FileNotFoundError:
         return None
 
+@st.cache_data
+def load_default_data():
+    """Load the default test dataset"""
+    try:
+        df = pd.read_csv('data/test_data.csv')
+        return df
+    except FileNotFoundError:
+        return None
+
 def calculate_metrics(y_true, y_pred, y_pred_proba):
     """Calculate all evaluation metrics"""
     metrics = {
@@ -174,115 +183,142 @@ def main():
     
     with tab1:
         st.header("Upload Test Dataset")
-        st.markdown("Upload a CSV file with heart disease patient data for prediction.")
         
-        # File uploader
-        uploaded_file = st.file_uploader(
-            "Choose a CSV file",
-            type=['csv'],
-            help="Upload a CSV file with patient features"
+        # Load default data automatically
+        default_data = load_default_data()
+        
+        # Data source selection
+        st.markdown("### 📊 Data Source")
+        data_source = st.radio(
+            "Choose data source:",
+            ["Use Default Dataset (50 samples)", "Upload Custom CSV File"],
+            horizontal=True
         )
         
-        if uploaded_file is not None:
-            try:
-                # Load data
-                df = pd.read_csv(uploaded_file)
+        df = None
+        
+        if data_source == "Use Default Dataset (50 samples)":
+            if default_data is not None:
+                df = default_data
+                st.success(f"✅ Default dataset loaded successfully! Shape: {df.shape}")
+                st.info("💡 This is a sample dataset from the trained model. You can also upload your own CSV file.")
+            else:
+                st.error("❌ Default dataset not found. Please upload a CSV file instead.")
+        
+        else:  # Upload Custom CSV File
+            st.markdown("Upload a CSV file with heart disease patient data for prediction.")
+            
+            # File uploader
+            uploaded_file = st.file_uploader(
+                "Choose a CSV file",
+                type=['csv'],
+                help="Upload a CSV file with patient features"
+            )
+            
+            if uploaded_file is not None:
+                try:
+                    # Load data
+                    df = pd.read_csv(uploaded_file)
+                    st.success(f"✅ Custom dataset loaded successfully! Shape: {df.shape}")
+                except Exception as e:
+                    st.error(f"Error loading file: {str(e)}")
+        
+        # Process data if available
+        if df is not None:
+            # Display first few rows
+            with st.expander("📋 View Dataset Preview"):
+                st.dataframe(df.head(10), use_container_width=True)
+            
+            # Check if target column exists
+            has_target = 'target' in df.columns
+            
+            if has_target:
+                X = df.drop('target', axis=1)
+                y = df['target']
+            else:
+                X = df
+                y = None
+            
+            # Load model and scaler
+            model = load_model(selected_model)
+            scaler = load_scaler()
+            
+            if model is not None and scaler is not None:
+                st.markdown("---")
+                st.subheader(f"🔮 Predictions using {selected_model}")
                 
-                st.success(f"✅ Dataset loaded successfully! Shape: {df.shape}")
+                # Preprocess and predict
+                X_scaled = scaler.transform(X)
+                predictions = model.predict(X_scaled)
+                prediction_proba = model.predict_proba(X_scaled)[:, 1]
                 
-                # Display first few rows
-                with st.expander("📋 View Dataset Preview"):
-                    st.dataframe(df.head(10), use_container_width=True)
+                # Create results dataframe
+                results_df = pd.DataFrame({
+                    'Prediction': ['Disease' if p == 1 else 'No Disease' for p in predictions],
+                    'Probability': prediction_proba
+                })
                 
-                # Check if target column exists
-                has_target = 'target' in df.columns
+                # Display predictions
+                col1, col2 = st.columns([2, 1])
                 
+                with col1:
+                    st.markdown("#### Prediction Results")
+                    display_df = pd.concat([df.reset_index(drop=True), results_df], axis=1)
+                    st.dataframe(display_df, use_container_width=True)
+                
+                with col2:
+                    st.markdown("#### Summary Statistics")
+                    disease_count = (predictions == 1).sum()
+                    no_disease_count = (predictions == 0).sum()
+                    
+                    st.metric("Total Samples", len(predictions))
+                    st.metric("Disease Predicted", f"{disease_count} ({disease_count/len(predictions)*100:.1f}%)")
+                    st.metric("No Disease Predicted", f"{no_disease_count} ({no_disease_count/len(predictions)*100:.1f}%)")
+                
+                # If target exists, show evaluation metrics
                 if has_target:
-                    X = df.drop('target', axis=1)
-                    y = df['target']
-                else:
-                    X = df
-                    y = None
-                
-                # Load model and scaler
-                model = load_model(selected_model)
-                scaler = load_scaler()
-                
-                if model is not None and scaler is not None:
                     st.markdown("---")
-                    st.subheader(f"🔮 Predictions using {selected_model}")
+                    st.subheader("📊 Model Evaluation Metrics")
                     
-                    # Preprocess and predict
-                    X_scaled = scaler.transform(X)
-                    predictions = model.predict(X_scaled)
-                    prediction_proba = model.predict_proba(X_scaled)[:, 1]
+                    metrics = calculate_metrics(y, predictions, prediction_proba)
+                    display_metrics(metrics)
                     
-                    # Create results dataframe
-                    results_df = pd.DataFrame({
-                        'Prediction': ['Disease' if p == 1 else 'No Disease' for p in predictions],
-                        'Probability': prediction_proba
-                    })
+                    # Confusion Matrix
+                    st.markdown("---")
+                    st.subheader("🔢 Confusion Matrix")
                     
-                    # Display predictions
-                    col1, col2 = st.columns([2, 1])
+                    col1, col2 = st.columns([1, 1])
                     
                     with col1:
-                        st.markdown("#### Prediction Results")
-                        display_df = pd.concat([df.reset_index(drop=True), results_df], axis=1)
-                        st.dataframe(display_df, use_container_width=True)
+                        cm = confusion_matrix(y, predictions)
+                        fig = plot_confusion_matrix(cm, selected_model)
+                        st.pyplot(fig)
                     
                     with col2:
-                        st.markdown("#### Summary Statistics")
-                        disease_count = (predictions == 1).sum()
-                        no_disease_count = (predictions == 0).sum()
-                        
-                        st.metric("Total Samples", len(predictions))
-                        st.metric("Disease Predicted", f"{disease_count} ({disease_count/len(predictions)*100:.1f}%)")
-                        st.metric("No Disease Predicted", f"{no_disease_count} ({no_disease_count/len(predictions)*100:.1f}%)")
-                    
-                    # If target exists, show evaluation metrics
-                    if has_target:
-                        st.markdown("---")
-                        st.subheader("📊 Model Evaluation Metrics")
-                        
-                        metrics = calculate_metrics(y, predictions, prediction_proba)
-                        display_metrics(metrics)
-                        
-                        # Confusion Matrix
-                        st.markdown("---")
-                        st.subheader("🔢 Confusion Matrix")
-                        
-                        col1, col2 = st.columns([1, 1])
-                        
-                        with col1:
-                            cm = confusion_matrix(y, predictions)
-                            fig = plot_confusion_matrix(cm, selected_model)
-                            st.pyplot(fig)
-                        
-                        with col2:
-                            st.markdown("#### Classification Report")
-                            report = classification_report(y, predictions, 
-                                                          target_names=['No Disease', 'Disease'])
-                            st.text(report)
-                        
-                    # Download predictions
-                    st.markdown("---")
-                    csv = display_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Download Predictions as CSV",
-                        data=csv,
-                        file_name=f"predictions_{selected_model.replace(' ', '_').lower()}.csv",
-                        mime="text/csv",
-                    )
-                    
-            except Exception as e:
-                st.error(f"❌ Error processing file: {str(e)}")
-                st.info("Please ensure your CSV has the correct columns and format.")
+                        st.markdown("#### Classification Report")
+                        report = classification_report(y, predictions, 
+                                                      target_names=['No Disease', 'Disease'])
+                        st.text(report)
+                
+                # Download predictions
+                st.markdown("---")
+                csv = display_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Predictions as CSV",
+                    data=csv,
+                    file_name=f"predictions_{selected_model.replace(' ', '_').lower()}.csv",
+                    mime="text/csv",
+                )
         
         else:
-            st.info("👆 Please upload a CSV file to begin prediction.")
-            st.markdown("#### Sample Data Available")
-            st.markdown("You can test the app using the provided test data: `data/test_data.csv`")
+            st.info("👆 Please select a data source above to begin prediction.")
+            st.markdown("#### 💡 Tips")
+            st.markdown("""
+            - **Default Dataset**: Automatically loaded with 50 sample records
+            - **Custom Upload**: Upload your own CSV file with the same feature columns
+            - The CSV should have 13 feature columns (age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal)
+            - Optionally include 'target' column (0/1) for model evaluation
+            """)
     
     with tab2:
         st.header("📈 Model Performance Comparison")
